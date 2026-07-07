@@ -300,52 +300,101 @@ bool LD2410S::readSerialNumber(char *buffer, size_t len)
 
 ``` cpp
 
-bool LD2410S::writeGenericParametersCommand()
+bool LD2410S::writeGenericConfig(uint32_t delay_s, float status_report_hz, float range_report_hz, uint32_t response_speed)
 {
-    const uint8_t farthest_distance[6] = {0x05, 0x00, 0x01, 0x00, 0x00, 0x00};    // 1m
-    const uint8_t nearest_distance[6] = {0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};     // 0.0m
-    const uint8_t delay_time[6] = {0x06, 0x00, 0x0A, 0x00, 0x00, 0x00};           // 10s
-    const uint8_t freq_status_report[6] = {0x02, 0x00, 0x28, 0x00, 0x00, 0x00};   // 4.0 Hz
-    const uint8_t freq_distance_report[6] = {0x0C, 0x00, 0x28, 0x00, 0x00, 0x00}; // 4.0Hz
-    const uint8_t response_speed[6] = {0x0B, 0x00, 0x0A, 0x00, 0x00, 0x00};       // response normal
+    // Make sure we clear buffer
+    while (_serial.available())
+        _serial.read();
 
     sendFrameHead();
 
-    const uint8_t cmd[] = {0x26, 0x00, 0x70, 0x00};
+    const uint8_t cmd[] = {0x1A, 0x00, 0x70, 0x00}; // Length is 26 bytes (0x1A) for 4 parameters
     _serial.write(cmd, sizeof(cmd));
-    _serial.write(farthest_distance, sizeof(farthest_distance));
-    _serial.write(nearest_distance, sizeof(nearest_distance));
-    _serial.write(delay_time, sizeof(delay_time));
-    _serial.write(freq_status_report, sizeof(freq_status_report));
-    _serial.write(freq_distance_report, sizeof(freq_distance_report));
-    _serial.write(response_speed, sizeof(response_speed));
+
+    // Parameter 1: Unmanned Delay Time
+    uint8_t delay_param[6] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00};
+    delay_param[2] = delay_s & 0xFF;
+    delay_param[3] = (delay_s >> 8) & 0xFF;
+    _serial.write(delay_param, sizeof(delay_param));
+
+    // Parameter 2: Status Reporting Frequency
+    uint8_t freq_param[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t freq_val = (uint32_t)(status_report_hz * 10.0f);
+    freq_param[2] = freq_val & 0xFF;
+    freq_param[3] = (freq_val >> 8) & 0xFF;
+    _serial.write(freq_param, sizeof(freq_param));
+
+    // Parameter 3: Range Reporting Frequency
+    uint8_t range_freq_param[6] = {0x0C, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t range_freq_val = (uint32_t)(range_report_hz * 10.0f);
+    range_freq_param[2] = range_freq_val & 0xFF;
+    range_freq_param[3] = (range_freq_val >> 8) & 0xFF;
+    _serial.write(range_freq_param, sizeof(range_freq_param));
+
+    // Parameter 4: Response Speed
+    uint8_t resp_param[6] = {0x0B, 0x00, 0x00, 0x00, 0x00, 0x00};
+    resp_param[2] = response_speed & 0xFF;
+    resp_param[3] = (response_speed >> 8) & 0xFF;
+    _serial.write(resp_param, sizeof(resp_param));
 
     sendFrameEnd();
     _serial.flush();
 
-    unsigned long start = millis();
+    // Verify ACK...
+}
 
-    while (millis() - start < 1000)
-    {
-        if (_serial.available() >= 14)
-        {
-            uint8_t ack[14];
-            _serial.readBytes(ack, sizeof(ack));
-            LD2410S_LOG_LINE("Generic parameters data: ");
-            for (int i = 0; i < 14; i++)
-            {
-                LD2410S_LOG("%02X ", ack[i]);
-            }
-            LD2410S_LOG_LINE("");
-            if (ack[0] == 0xFD && ack[1] == 0xFC && ack[2] == 0xFB && ack[3] == 0xFA &&
-                ack[6] == 0x70 && ack[7] == 0x01)
-            {
-                LD2410S_LOG_LINE("Write generic parameters Ok");
-                return true;
-            }
-        }
+bool LD2410S::writeDistanceConfig(uint32_t farthest_distance, uint32_t nearest_distance)
+{
+    // Make sure we clear buffer
+    while (_serial.available())
+        _serial.read();
+
+    sendFrameHead();
+
+    const uint8_t cmd[] = {0x0E, 0x00, 0x70, 0x00};
+    _serial.write(cmd, sizeof(cmd));
+
+    uint8_t far_param[6] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+    far_param[2] = farthest_distance & 0xFF;
+    far_param[3] = (farthest_distance >> 8) & 0xFF;
+    _serial.write(far_param, sizeof(far_param));
+
+    uint8_t near_param[6] = {0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};
+    near_param[2] = nearest_distance & 0xFF;
+    near_param[3] = (nearest_distance >> 8) & 0xFF;
+    _serial.write(near_param, sizeof(near_param));
+
+    sendFrameEnd();
+    _serial.flush();
+
+    // Verify ACK...
+}
+
+bool LD2410S::writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_threshold)
+{
+    sendFrameHead();
+    
+    const uint8_t cmd[] = {0x14, 0x00, 0x72, 0x00};
+    _serial.write(cmd, sizeof(cmd));
+
+    for (uint32_t gate = 0; gate <= 7; ++gate) {
+        uint8_t trigger_param[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        trigger_param[0] = static_cast<uint8_t>(gate);
+        trigger_param[2] = trigger_threshold & 0xFF;
+        trigger_param[3] = (trigger_threshold >> 8) & 0xFF;
+        _serial.write(trigger_param, sizeof(trigger_param));
+
+        uint8_t hold_param[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+        hold_param[0] = static_cast<uint8_t>(gate + 8);
+        hold_param[2] = hold_threshold & 0xFF;
+        hold_param[3] = (hold_threshold >> 8) & 0xFF;
+        _serial.write(hold_param, sizeof(hold_param));
     }
-    return false;
+
+    sendFrameEnd();
+    _serial.flush();
+
+    // Verify ACK...
 }
 ```
 
