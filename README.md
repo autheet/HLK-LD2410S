@@ -691,12 +691,38 @@ If you are using this library within the **Paxcounter** project, the device feat
 2. Reboot the device so it enters the Wi-Fi boot menu.
 3. The device will host a TCP server on port `2323`.
 
-### Connecting on Mac / Linux
-Since the official HLK-LD2410S tool is Windows-only, you'll likely run it in a Windows VM. To map the TCP port to a physical-looking COM port on your Mac/Linux host:
-```bash
-socat PTY,link=/tmp/ttyRadar,raw,echo=0 TCP:192.168.1.100:2323
-```
-You can then pass `/tmp/ttyRadar` into your VM.
+### Connecting via Windows VM (VirtualBox)
+Since the official HLK-LD2410S tool is Windows-only, you'll likely run it in a Windows VM. VirtualBox can natively map a raw TCP connection to a virtual COM port without requiring any extra software.
 
-### Connecting on Windows
-Use a Virtual COM port software like [HW VSP3](https://www.hw-group.com/software/hw-vsp3-virtual-serial-port) or [com0com](https://com0com.sourceforge.net/) to map the ESP32's IP (`192.168.1.x`) and port `2323` to a virtual COM port. Then, open the official HLK-LD2410S tool and select the virtual COM port to configure the radar wirelessly.
+1. In VirtualBox, select your Windows VM and click **Settings**.
+2. Go to the **Serial Ports** tab and select **Port 1**.
+3. Check **Enable Serial Port**.
+4. Set the following:
+   * **Port Number:** `COM1`
+   * **Port Mode:** `TCP`
+   * **Path/Address:** `192.168.1.x:2323` *(replace with your ESP32's actual IP)*
+5. **CRITICAL:** Check the box that says **Connect to existing pipe/socket**.
+6. Start your Windows VM.
+
+Inside Windows, open the official HLK-LD2410S tool and connect to `COM1` at `115200` baud.
+
+#### Alternative for Mac/Linux: Using a UNIX Pipe (`socat`)
+If VirtualBox's native TCP mode gives you trouble, you can use `socat` to bridge the connection via a UNIX socket. VirtualBox handles UNIX sockets much more reliably than `PTY` character devices on Mac.
+
+**Step 1: Configure VirtualBox**
+1. Set **Port Mode** to `Host Pipe`.
+2. Uncheck **Connect to existing pipe/socket** (VirtualBox will create the pipe).
+3. Set **Path/Address** to `/tmp/vboxRadarPipe`.
+4. Start your Windows VM.
+
+**Step 2: Run `socat` on your Mac**
+Once the VM is running, VirtualBox will have created the UNIX socket. Open your Mac terminal and connect that socket to your ESP32:
+```bash
+socat UNIX-CONNECT:/tmp/vboxRadarPipe TCP:your-device-name.local:2323,retry=10000,interval=2
+```
+
+* **UNIX-CONNECT**: Tells `socat` to connect to the pipe VirtualBox just created.
+* **retry=10000,interval=2**: Keeps trying to connect to the ESP32 in the background, making it completely hands-off when you reboot your device.
+
+### Connecting on Windows Natively
+If you are running Windows natively, use a Virtual COM port software like [HW VSP3](https://www.hw-group.com/software/hw-vsp3-virtual-serial-port) or [com0com](https://com0com.sourceforge.net/) to map the ESP32's hostname (`your-device-name.local`) or IP and port `2323` to a virtual COM port. Then, open the official HLK-LD2410S tool and select the virtual COM port.
