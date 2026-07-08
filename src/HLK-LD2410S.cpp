@@ -896,3 +896,91 @@ bool LD2410S::writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_t
     }
     return ack_success;
 }
+
+bool LD2410S::writeSensitivityConfig(const uint32_t trigger_thresholds[16], const uint32_t hold_thresholds[16])
+{
+    // Write Trigger Thresholds (Command: 0x0072)
+    sendFrameHead();
+    
+    // Length is 2 bytes cmd + (16 gates * 6 bytes) = 98 bytes (0x62)
+    const uint8_t trigger_cmd[] = {0x62, 0x00, 0x72, 0x00};
+    _serial.write(trigger_cmd, sizeof(trigger_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint32_t thresh = trigger_thresholds[i];
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;         // Parameter word LSB
+        gate_param[1] = (i >> 8) & 0xFF;  // Parameter word MSB
+        gate_param[2] = thresh & 0xFF;
+        gate_param[3] = (thresh >> 8) & 0xFF;
+        gate_param[4] = (thresh >> 16) & 0xFF;
+        gate_param[5] = (thresh >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    unsigned long start = millis();
+    bool ack_success = false;
+    while (millis() - start < 1000)
+    {
+        if (_serial.available() >= 14)
+        {
+            uint8_t ack[14];
+            _serial.readBytes(ack, sizeof(ack));
+            if (ack[0] == 0xFD && ack[1] == 0xFC && ack[2] == 0xFB && ack[3] == 0xFA &&
+                ack[6] == 0x72 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00)
+            {
+                ack_success = true;
+                break;
+            }
+        }
+    }
+    
+    if (!ack_success) return false;
+    
+    // Clear buffer just in case
+    while(_serial.available()) _serial.read();
+
+    // Write Hold Thresholds (Command: 0x0076)
+    sendFrameHead();
+    
+    const uint8_t hold_cmd[] = {0x62, 0x00, 0x76, 0x00};
+    _serial.write(hold_cmd, sizeof(hold_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint32_t thresh = hold_thresholds[i];
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;
+        gate_param[1] = (i >> 8) & 0xFF;
+        gate_param[2] = thresh & 0xFF;
+        gate_param[3] = (thresh >> 8) & 0xFF;
+        gate_param[4] = (thresh >> 16) & 0xFF;
+        gate_param[5] = (thresh >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    start = millis();
+    ack_success = false;
+    while (millis() - start < 1000)
+    {
+        if (_serial.available() >= 14)
+        {
+            uint8_t ack[14];
+            _serial.readBytes(ack, sizeof(ack));
+            if (ack[0] == 0xFD && ack[1] == 0xFC && ack[2] == 0xFB && ack[3] == 0xFA &&
+                ack[6] == 0x76 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00)
+            {
+                ack_success = true;
+                break;
+            }
+        }
+    }
+    return ack_success;
+}

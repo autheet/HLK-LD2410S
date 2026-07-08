@@ -43,6 +43,7 @@ Arduino library for **low power human presence sensor**  module **HLK-LD2410S**
     - [Write generic parameter commands](#--write-generic-parameter-commands)
     - [Read common parameter commands](#--read-common-parameter-commands)
 - [Example Code (ESP32)](#-example-code-esp32)
+- [Paxcounter Wi-Fi Bridge Integration](#-paxcounter-wi-fi-bridge-integration)
 ## [Overview](#overview)
 The **HLK-LD2410S** is a battery-powered ultra-low-power milimeter-wave sensor based on Hi-Link's milimeter-wave sensor chip.
 - Intergrated intelligent milimeter wave sensor SoC 24GHz 
@@ -561,3 +562,23 @@ Motion
 Target Distance: 35 cm
 Motion
 ```
+
+## 📡 [Paxcounter Wi-Fi Bridge Integration](#-paxcounter-wi-fi-bridge-integration)
+
+> **⚠️ Prerequisite:** To use granular array-based threshold configurations, the HLK-LD2410S must be updated to **Firmware Version 1.1.1** or newer. You can perform this update via the official Host Tool using the Wi-Fi bridge described below.
+
+If you are using this library within the **Paxcounter** project, the device features a transparent TCP-to-Serial bridge during the `boot delay` phase. This allows you to connect the official HLK-LD2410S host tool to the radar wirelessly over Wi-Fi without needing a physical USB connection to the sensor's UART pins.
+
+1. Ensure `HAS_LD2410S_RADAR` is enabled in your configuration.
+2. Reboot the device so it enters the Wi-Fi boot menu.
+3. The device will host a TCP server on port `2323`.
+
+### Connecting on Mac / Linux
+Since the official HLK-LD2410S tool is Windows-only, you'll likely run it in a Windows VM. To map the TCP port to a physical-looking COM port on your Mac/Linux host:
+```bash
+socat PTY,link=/tmp/ttyRadar,raw,echo=0 TCP:192.168.1.100:2323
+```
+You can then pass `/tmp/ttyRadar` into your VM.
+
+### Connecting on Windows
+Use a Virtual COM port software like [HW VSP3](https://www.hw-group.com/software/hw-vsp3-virtual-serial-port) or [com0com](https://com0com.sourceforge.net/) to map the ESP32's IP (`192.168.1.x`) and port `2323` to a virtual COM port. Then, open the official HLK-LD2410S tool and select the virtual COM port to configure the radar wirelessly.

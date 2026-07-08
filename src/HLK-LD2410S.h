@@ -133,6 +133,14 @@ public:
     bool writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_threshold);
 
     /**
+     * @brief Write array of trigger and hold thresholds for all distance gates (0-15)
+     * @param trigger_thresholds Array of 16 moving sensitivities.
+     * @param hold_thresholds Array of 16 static sensitivities.
+     * @return true if successful
+     */
+    bool writeSensitivityConfig(const uint32_t trigger_thresholds[16], const uint32_t hold_thresholds[16]);
+
+    /**
      * @brief Read 8-byte serial number
      * @param buffer Buffer to store null-terminated serial number
      * @param len Buffer size (must be at least 9)
