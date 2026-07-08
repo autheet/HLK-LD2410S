@@ -48,13 +48,13 @@ public:
      * @param baudrate 115200 or 256000
      * @return true if successful
      */
-    bool begin(uint32_t baudrate = 256000);
+    bool begin(uint32_t baudrate = 115200);
 
     /**
      * @brief Configure serial for passive listening (skip config mode)
      * @param baudrate 115200 or 256000
      */
-    void beginPassive(uint32_t baudrate = 256000); // set default baudrate 115200
+    void beginPassive(uint32_t baudrate = 115200);
 
     /**
      * @brief Set generic parameters like unmanned delay and reporting frequency
