@@ -16,7 +16,7 @@
  * @param txPin GPIO pin number used for transmitting data to the sensor.
  */
 LD2410S::LD2410S(HardwareSerial &serial, int rxPin, int txPin)
-    : _serial(serial), _rxPin(rxPin), _txPin(txPin), _motion(false), _distance(0) {}
+    : _serial(serial), _rxPin(rxPin), _txPin(txPin), _motion(false), _distance(0), _lastFrameTime(0) {}
 
 
 /**
@@ -53,19 +53,27 @@ bool LD2410S::begin(uint32_t baudrate)
             return false;
     }
 
-    delay(100);
+    // Commented out to prevent forcing hardcoded 1m distance
+    /*
     if (!writeGenericParametersCommand())
     {
         LD2410S_LOG_LINE("Write generic parameters failed!");
         return false;
     }
+    */
 
     if (!switchToMinimalMode())
     {
-        LD2410S_LOG_LINE("Set to minimal data output mode failed!");
+        LD2410S_LOG_LINE("Switch to minimal mode failed!");
+        return false;
     }
-    delay(100);
+
     return true;
+}
+
+void LD2410S::beginPassive(uint32_t baudrate)
+{
+    _serial.begin(baudrate, SERIAL_8N1, _rxPin, _txPin);
 }
 
 /**
@@ -127,8 +135,10 @@ bool LD2410S::switchToStandardMode()
  */
 bool LD2410S::switchToMinimalMode()
 {
-    sendFrameHead();
+    while (_serial.available())
+        _serial.read();
 
+    sendFrameHead();
     _serial.write(0x08);
     _serial.write(0x00);
     _serial.write(0x7A);
@@ -228,6 +238,11 @@ void LD2410S::loop()
  * @return true
  * @return false
  */
+uint32_t LD2410S::lastFrameTime() const
+{
+    return _lastFrameTime;
+}
+
 /**
  * @brief Parses a minimal data frame from the LD2410S sensor and updates motion and distance state.
  *
@@ -249,14 +264,16 @@ bool LD2410S::parseMinimalFrame(uint8_t *frame, size_t len)
 
     if (frame[0] != 0x6E || frame[4] != 0x62)
         return false;
+    
+    _lastFrameTime = millis();
 
     uint8_t target_state = frame[1];
 
-    if (target_state == 0 || target_state == 1)
+    if (target_state == 0 || target_state == 1 || target_state == 2)
     {
         _motion = false;
     }
-    else if (target_state == 2 || target_state == 3)
+    else if (target_state == 3)
     {
         _motion = true;
     }
@@ -333,24 +350,41 @@ void LD2410S::sendFrameEnd()
  */
 bool LD2410S::enterConfigMode()
 {
+    while (_serial.available())
+        _serial.read();
+
     sendFrameHead();
     const uint8_t cmd[] = {0x04, 0x00, 0xFF, 0x00, 0x01, 0x00};
     _serial.write(cmd, sizeof(cmd));
     sendFrameEnd();
 
     unsigned long start = millis();
+    int matched = 0;
+    uint8_t ack[18];
+    int ack_idx = 0;
 
     while (millis() - start < 500)
     {
-        if (_serial.available() >= 18)
+        if (_serial.available())
         {
-            uint8_t ack[18];
-            _serial.readBytes(ack, sizeof(ack));
-            if (ack[0] == 0xFD && ack[1] == 0xFC && ack[2] == 0xFB && ack[3] == 0xFA &&
-                ack[6] == 0xFF && ack[7] == 0x01 && ack[10] == 0x03 && ack[11] == 0x00)
-            {
-                LD2410S_LOG_LINE("Enter config mode Ok");
-                return true;
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 18) {
+                    if (ack[6] == 0xFF && ack[7] == 0x01 && ack[10] == 0x03 && ack[11] == 0x00) {
+                        LD2410S_LOG_LINE("Enter config mode Ok");
+                        return true;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0; // Reset state machine on mismatch
             }
         }
     }
@@ -450,6 +484,78 @@ bool LD2410S::writeGenericParametersCommand()
     return false;
 }
 
+bool LD2410S::writeGenericConfig(uint32_t delay_s, float status_report_hz, float range_report_hz, uint32_t response_speed)
+{
+    // Make sure we clear buffer
+    while (_serial.available())
+        _serial.read();
+
+    sendFrameHead();
+
+    const uint8_t cmd[] = {0x1A, 0x00, 0x70, 0x00}; // Length is 26 bytes (0x1A) for 4 parameters
+    _serial.write(cmd, sizeof(cmd));
+
+    // Parameter 1: Unmanned Delay Time
+    uint8_t delay_param[6] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00};
+    delay_param[2] = delay_s & 0xFF;
+    delay_param[3] = (delay_s >> 8) & 0xFF;
+    _serial.write(delay_param, sizeof(delay_param));
+
+    // Parameter 2: Status Reporting Frequency
+    uint8_t freq_param[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t freq_val = (uint32_t)(status_report_hz * 10.0f);
+    freq_param[2] = freq_val & 0xFF;
+    freq_param[3] = (freq_val >> 8) & 0xFF;
+    _serial.write(freq_param, sizeof(freq_param));
+
+    // Parameter 3: Range Reporting Frequency
+    uint8_t range_freq_param[6] = {0x0C, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t range_freq_val = (uint32_t)(range_report_hz * 10.0f);
+    range_freq_param[2] = range_freq_val & 0xFF;
+    range_freq_param[3] = (range_freq_val >> 8) & 0xFF;
+    _serial.write(range_freq_param, sizeof(range_freq_param));
+
+    // Parameter 4: Response Speed
+    uint8_t resp_param[6] = {0x0B, 0x00, 0x00, 0x00, 0x00, 0x00};
+    resp_param[2] = response_speed & 0xFF;
+    resp_param[3] = (response_speed >> 8) & 0xFF;
+    _serial.write(resp_param, sizeof(resp_param));
+
+    sendFrameEnd();
+    _serial.flush();
+
+    unsigned long start = millis();
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x70 && ack[7] == 0x01) {
+                        LD2410S_LOG_LINE("Write generic config Ok");
+                        return true;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    return false;
+}
 
 /**
  * @brief Parses a 32-bit unsigned integer from a little-endian byte array.
@@ -654,4 +760,295 @@ bool LD2410S::readSerialNumber(char *buffer, size_t len)
     }
     delay(50);
     return false;
+}
+
+bool LD2410S::writeDistanceConfig(uint32_t farthest_distance_param, uint32_t nearest_distance_param)
+{
+    uint8_t farthest_distance[6] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t nearest_distance[6] = {0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};
+    
+    // Farthest distance parameter (Word: 0x0005)
+    farthest_distance[2] = farthest_distance_param & 0xFF;
+    farthest_distance[3] = (farthest_distance_param >> 8) & 0xFF;
+    farthest_distance[4] = (farthest_distance_param >> 16) & 0xFF;
+    farthest_distance[5] = (farthest_distance_param >> 24) & 0xFF;
+    
+    // Nearest distance parameter (Word: 0x000A)
+    nearest_distance[2] = nearest_distance_param & 0xFF;
+    nearest_distance[3] = (nearest_distance_param >> 8) & 0xFF;
+    nearest_distance[4] = (nearest_distance_param >> 16) & 0xFF;
+    nearest_distance[5] = (nearest_distance_param >> 24) & 0xFF;
+    
+    sendFrameHead();
+
+    const uint8_t cmd[] = {0x0E, 0x00, 0x70, 0x00};
+    _serial.write(cmd, sizeof(cmd));
+    _serial.write(farthest_distance, sizeof(farthest_distance));
+    _serial.write(nearest_distance, sizeof(nearest_distance));
+
+    sendFrameEnd();
+    _serial.flush();
+
+    unsigned long start = millis();
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x70 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        return true;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    return false;
+}
+
+bool LD2410S::writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_threshold)
+{
+    // Write Trigger Thresholds (Command: 0x0072)
+    sendFrameHead();
+    
+    // Length is 2 bytes cmd + (16 gates * 6 bytes) = 98 bytes (0x62)
+    const uint8_t trigger_cmd[] = {0x62, 0x00, 0x72, 0x00};
+    _serial.write(trigger_cmd, sizeof(trigger_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;         // Parameter word LSB
+        gate_param[1] = (i >> 8) & 0xFF;  // Parameter word MSB
+        gate_param[2] = trigger_threshold & 0xFF;
+        gate_param[3] = (trigger_threshold >> 8) & 0xFF;
+        gate_param[4] = (trigger_threshold >> 16) & 0xFF;
+        gate_param[5] = (trigger_threshold >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    unsigned long start = millis();
+    bool ack_success = false;
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x72 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    
+    if (!ack_success) return false;
+    
+    // Clear buffer just in case
+    while(_serial.available()) _serial.read();
+
+    // Write Hold Thresholds (Command: 0x0076)
+    sendFrameHead();
+    
+    const uint8_t hold_cmd[] = {0x62, 0x00, 0x76, 0x00};
+    _serial.write(hold_cmd, sizeof(hold_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;
+        gate_param[1] = (i >> 8) & 0xFF;
+        gate_param[2] = hold_threshold & 0xFF;
+        gate_param[3] = (hold_threshold >> 8) & 0xFF;
+        gate_param[4] = (hold_threshold >> 16) & 0xFF;
+        gate_param[5] = (hold_threshold >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    start = millis();
+    ack_success = false;
+    matched = 0;
+    ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x76 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    return ack_success;
+}
+
+bool LD2410S::writeSensitivityConfig(const uint32_t trigger_thresholds[16], const uint32_t hold_thresholds[16])
+{
+    // Write Trigger Thresholds (Command: 0x0072)
+    sendFrameHead();
+    
+    // Length is 2 bytes cmd + (16 gates * 6 bytes) = 98 bytes (0x62)
+    const uint8_t trigger_cmd[] = {0x62, 0x00, 0x72, 0x00};
+    _serial.write(trigger_cmd, sizeof(trigger_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint32_t thresh = trigger_thresholds[i];
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;         // Parameter word LSB
+        gate_param[1] = (i >> 8) & 0xFF;  // Parameter word MSB
+        gate_param[2] = thresh & 0xFF;
+        gate_param[3] = (thresh >> 8) & 0xFF;
+        gate_param[4] = (thresh >> 16) & 0xFF;
+        gate_param[5] = (thresh >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    unsigned long start = millis();
+    bool ack_success = false;
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x72 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    
+    if (!ack_success) return false;
+    
+    // Clear buffer just in case
+    while(_serial.available()) _serial.read();
+
+    // Write Hold Thresholds (Command: 0x0076)
+    sendFrameHead();
+    
+    const uint8_t hold_cmd[] = {0x62, 0x00, 0x76, 0x00};
+    _serial.write(hold_cmd, sizeof(hold_cmd));
+    
+    for (uint32_t i = 0; i < 16; i++) {
+        uint32_t thresh = hold_thresholds[i];
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;
+        gate_param[1] = (i >> 8) & 0xFF;
+        gate_param[2] = thresh & 0xFF;
+        gate_param[3] = (thresh >> 8) & 0xFF;
+        gate_param[4] = (thresh >> 16) & 0xFF;
+        gate_param[5] = (thresh >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+    
+    sendFrameEnd();
+    _serial.flush();
+    
+    // Wait for ACK
+    start = millis();
+    ack_success = false;
+    matched = 0;
+    ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x76 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    return ack_success;
 }

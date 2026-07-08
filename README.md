@@ -43,6 +43,7 @@ Arduino library for **low power human presence sensor**  module **HLK-LD2410S**
     - [Write generic parameter commands](#--write-generic-parameter-commands)
     - [Read common parameter commands](#--read-common-parameter-commands)
 - [Example Code (ESP32)](#-example-code-esp32)
+- [Paxcounter Wi-Fi Bridge Integration](#-paxcounter-wi-fi-bridge-integration)
 ## [Overview](#overview)
 The **HLK-LD2410S** is a battery-powered ultra-low-power milimeter-wave sensor based on Hi-Link's milimeter-wave sensor chip.
 - Intergrated intelligent milimeter wave sensor SoC 24GHz 
@@ -300,52 +301,219 @@ bool LD2410S::readSerialNumber(char *buffer, size_t len)
 
 ``` cpp
 
-bool LD2410S::writeGenericParametersCommand()
+bool LD2410S::writeGenericConfig(uint32_t delay_s, float status_report_hz, float range_report_hz, uint32_t response_speed)
 {
-    const uint8_t farthest_distance[6] = {0x05, 0x00, 0x01, 0x00, 0x00, 0x00};    // 1m
-    const uint8_t nearest_distance[6] = {0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};     // 0.0m
-    const uint8_t delay_time[6] = {0x06, 0x00, 0x0A, 0x00, 0x00, 0x00};           // 10s
-    const uint8_t freq_status_report[6] = {0x02, 0x00, 0x28, 0x00, 0x00, 0x00};   // 4.0 Hz
-    const uint8_t freq_distance_report[6] = {0x0C, 0x00, 0x28, 0x00, 0x00, 0x00}; // 4.0Hz
-    const uint8_t response_speed[6] = {0x0B, 0x00, 0x0A, 0x00, 0x00, 0x00};       // response normal
+    // Make sure we clear buffer
+    while (_serial.available())
+        _serial.read();
 
     sendFrameHead();
 
-    const uint8_t cmd[] = {0x26, 0x00, 0x70, 0x00};
+    const uint8_t cmd[] = {0x1A, 0x00, 0x70, 0x00}; // Length is 26 bytes (0x1A) for 4 parameters
     _serial.write(cmd, sizeof(cmd));
-    _serial.write(farthest_distance, sizeof(farthest_distance));
-    _serial.write(nearest_distance, sizeof(nearest_distance));
-    _serial.write(delay_time, sizeof(delay_time));
-    _serial.write(freq_status_report, sizeof(freq_status_report));
-    _serial.write(freq_distance_report, sizeof(freq_distance_report));
-    _serial.write(response_speed, sizeof(response_speed));
+
+    // Parameter 1: Unmanned Delay Time
+    uint8_t delay_param[6] = {0x06, 0x00, 0x00, 0x00, 0x00, 0x00};
+    delay_param[2] = delay_s & 0xFF;
+    delay_param[3] = (delay_s >> 8) & 0xFF;
+    _serial.write(delay_param, sizeof(delay_param));
+
+    // Parameter 2: Status Reporting Frequency
+    uint8_t freq_param[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t freq_val = (uint32_t)(status_report_hz * 10.0f);
+    freq_param[2] = freq_val & 0xFF;
+    freq_param[3] = (freq_val >> 8) & 0xFF;
+    _serial.write(freq_param, sizeof(freq_param));
+
+    // Parameter 3: Range Reporting Frequency
+    uint8_t range_freq_param[6] = {0x0C, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint32_t range_freq_val = (uint32_t)(range_report_hz * 10.0f);
+    range_freq_param[2] = range_freq_val & 0xFF;
+    range_freq_param[3] = (range_freq_val >> 8) & 0xFF;
+    _serial.write(range_freq_param, sizeof(range_freq_param));
+
+    // Parameter 4: Response Speed
+    uint8_t resp_param[6] = {0x0B, 0x00, 0x00, 0x00, 0x00, 0x00};
+    resp_param[2] = response_speed & 0xFF;
+    resp_param[3] = (response_speed >> 8) & 0xFF;
+    _serial.write(resp_param, sizeof(resp_param));
 
     sendFrameEnd();
     _serial.flush();
 
     unsigned long start = millis();
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
 
     while (millis() - start < 1000)
     {
-        if (_serial.available() >= 14)
+        if (_serial.available())
         {
-            uint8_t ack[14];
-            _serial.readBytes(ack, sizeof(ack));
-            LD2410S_LOG_LINE("Generic parameters data: ");
-            for (int i = 0; i < 14; i++)
-            {
-                LD2410S_LOG("%02X ", ack[i]);
-            }
-            LD2410S_LOG_LINE("");
-            if (ack[0] == 0xFD && ack[1] == 0xFC && ack[2] == 0xFB && ack[3] == 0xFA &&
-                ack[6] == 0x70 && ack[7] == 0x01)
-            {
-                LD2410S_LOG_LINE("Write generic parameters Ok");
-                return true;
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x70 && ack[7] == 0x01) {
+                        LD2410S_LOG_LINE("Write generic config Ok");
+                        return true;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
             }
         }
     }
     return false;
+}
+
+bool LD2410S::writeDistanceConfig(uint32_t farthest_distance, uint32_t nearest_distance)
+{
+    // Make sure we clear buffer
+    while (_serial.available())
+        _serial.read();
+
+    sendFrameHead();
+
+    const uint8_t cmd[] = {0x0E, 0x00, 0x70, 0x00};
+    _serial.write(cmd, sizeof(cmd));
+
+    uint8_t far_param[6] = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+    far_param[2] = farthest_distance & 0xFF;
+    far_param[3] = (farthest_distance >> 8) & 0xFF;
+    _serial.write(far_param, sizeof(far_param));
+
+    uint8_t near_param[6] = {0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};
+    near_param[2] = nearest_distance & 0xFF;
+    near_param[3] = (nearest_distance >> 8) & 0xFF;
+    _serial.write(near_param, sizeof(near_param));
+
+    sendFrameEnd();
+    _serial.flush();
+
+    // Verify ACK...
+}
+
+bool LD2410S::writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_threshold)
+{
+    // Write Trigger Thresholds (Command: 0x0072)
+    sendFrameHead();
+
+    // Length is 2 bytes cmd + (16 gates * 6 bytes) = 98 bytes (0x62)
+    const uint8_t trigger_cmd[] = {0x62, 0x00, 0x72, 0x00};
+    _serial.write(trigger_cmd, sizeof(trigger_cmd));
+
+    for (uint32_t i = 0; i < 16; i++) {
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;         // Parameter word LSB
+        gate_param[1] = (i >> 8) & 0xFF;  // Parameter word MSB
+        gate_param[2] = trigger_threshold & 0xFF;
+        gate_param[3] = (trigger_threshold >> 8) & 0xFF;
+        gate_param[4] = (trigger_threshold >> 16) & 0xFF;
+        gate_param[5] = (trigger_threshold >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+
+    sendFrameEnd();
+    _serial.flush();
+
+    // Wait for ACK
+    unsigned long start = millis();
+    bool ack_success = false;
+    int matched = 0;
+    uint8_t ack[14];
+    int ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x72 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+
+    if (!ack_success) return false;
+
+    // Clear buffer just in case
+    while(_serial.available()) _serial.read();
+
+    // Write Hold Thresholds (Command: 0x0076)
+    sendFrameHead();
+
+    const uint8_t hold_cmd[] = {0x62, 0x00, 0x76, 0x00};
+    _serial.write(hold_cmd, sizeof(hold_cmd));
+
+    for (uint32_t i = 0; i < 16; i++) {
+        uint8_t gate_param[6];
+        gate_param[0] = i & 0xFF;
+        gate_param[1] = (i >> 8) & 0xFF;
+        gate_param[2] = hold_threshold & 0xFF;
+        gate_param[3] = (hold_threshold >> 8) & 0xFF;
+        gate_param[4] = (hold_threshold >> 16) & 0xFF;
+        gate_param[5] = (hold_threshold >> 24) & 0xFF;
+        _serial.write(gate_param, sizeof(gate_param));
+    }
+
+    sendFrameEnd();
+    _serial.flush();
+
+    // Wait for ACK
+    start = millis();
+    ack_success = false;
+    matched = 0;
+    ack_idx = 0;
+
+    while (millis() - start < 1000)
+    {
+        if (_serial.available())
+        {
+            uint8_t b = _serial.read();
+            if (matched == 0 && b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; }
+            else if (matched == 1 && b == 0xFC) { ack[1] = b; matched = 2; ack_idx = 2; }
+            else if (matched == 2 && b == 0xFB) { ack[2] = b; matched = 3; ack_idx = 3; }
+            else if (matched == 3 && b == 0xFA) { ack[3] = b; matched = 4; ack_idx = 4; }
+            else if (matched >= 4) {
+                ack[ack_idx++] = b;
+                if (ack_idx == 14) {
+                    if (ack[6] == 0x76 && ack[7] == 0x01 && ack[8] == 0x00 && ack[9] == 0x00) {
+                        ack_success = true;
+                        break;
+                    }
+                    if (b == 0xFD) { ack[0] = b; matched = 1; ack_idx = 1; } else { matched = 0; }
+                }
+            } else if (b == 0xFD) {
+                ack[0] = b; matched = 1; ack_idx = 1;
+            } else {
+                matched = 0;
+            }
+        }
+    }
+    return ack_success;
 }
 ```
 
@@ -512,3 +680,23 @@ Motion
 Target Distance: 35 cm
 Motion
 ```
+
+## 📡 [Paxcounter Wi-Fi Bridge Integration](#-paxcounter-wi-fi-bridge-integration)
+
+> **⚠️ Prerequisite:** To use granular array-based threshold configurations, the HLK-LD2410S must be updated to **Firmware Version 1.1.1** or newer. You can perform this update via the official Host Tool using the Wi-Fi bridge described below.
+
+If you are using this library within the **Paxcounter** project, the device features a transparent TCP-to-Serial bridge during the `boot delay` phase. This allows you to connect the official HLK-LD2410S host tool to the radar wirelessly over Wi-Fi without needing a physical USB connection to the sensor's UART pins.
+
+1. Ensure `HAS_LD2410S_RADAR` is enabled in your configuration.
+2. Reboot the device so it enters the Wi-Fi boot menu.
+3. The device will host a TCP server on port `2323`.
+
+### Connecting on Mac / Linux
+Since the official HLK-LD2410S tool is Windows-only, you'll likely run it in a Windows VM. To map the TCP port to a physical-looking COM port on your Mac/Linux host:
+```bash
+socat PTY,link=/tmp/ttyRadar,raw,echo=0 TCP:192.168.1.100:2323
+```
+You can then pass `/tmp/ttyRadar` into your VM.
+
+### Connecting on Windows
+Use a Virtual COM port software like [HW VSP3](https://www.hw-group.com/software/hw-vsp3-virtual-serial-port) or [com0com](https://com0com.sourceforge.net/) to map the ESP32's IP (`192.168.1.x`) and port `2323` to a virtual COM port. Then, open the official HLK-LD2410S tool and select the virtual COM port to configure the radar wirelessly.

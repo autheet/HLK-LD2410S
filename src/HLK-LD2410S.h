@@ -44,11 +44,27 @@ public:
     ~LD2410S();
 
     /**
-     * @brief Initialize serial communication and enter config mode
-     * @param baudrate Serial baudrate (default = 115200)
+     * @brief Configure serial and wait for valid data. Attempt to enter config mode.
+     * @param baudrate 115200 or 256000
      * @return true if successful
      */
-    bool begin(uint32_t baudrate = 115200); // set default baudrate 115200
+    bool begin(uint32_t baudrate = 115200);
+
+    /**
+     * @brief Configure serial for passive listening (skip config mode)
+     * @param baudrate 115200 or 256000
+     */
+    void beginPassive(uint32_t baudrate = 115200);
+
+    /**
+     * @brief Set generic parameters like unmanned delay and reporting frequency
+     * @param delay_s Unmanned delay in seconds (10 to 120)
+     * @param status_report_hz Status reporting frequency in Hz (0.5 to 8.0)
+     * @param range_report_hz Distance reporting frequency in Hz (0.5 to 8.0)
+     * @param response_speed Response speed (5 for Normal, 10 for Fast)
+     * @return true if successful
+     */
+    bool writeGenericConfig(uint32_t delay_s, float status_report_hz, float range_report_hz, uint32_t response_speed);
 
     /**
      * @brief Read and process incoming frames (non-blocking)
@@ -101,6 +117,30 @@ public:
     bool readCommonParametersCommand(uint32_t &farthest_distance, uint32_t &nearest_distance, uint32_t &delay_time, uint32_t &freq_status, uint32_t &freq_distance, uint32_t &respond_speed);
 
     /**
+     * @brief Write max and min distance (in units of distance gates, where 1 gate = 0.75m)
+     * @param farthest_distance Max distance gate (1-16)
+     * @param nearest_distance Min distance gate (0-16)
+     * @return true if successful
+     */
+    bool writeDistanceConfig(uint32_t farthest_distance, uint32_t nearest_distance);
+
+    /**
+     * @brief Write trigger and hold thresholds for all distance gates (0-15)
+     * @param trigger_threshold Moving sensitivity (0-100). Higher = less sensitive.
+     * @param hold_threshold Static sensitivity (0-100). Higher = less sensitive.
+     * @return true if successful
+     */
+    bool writeSensitivityConfig(uint32_t trigger_threshold, uint32_t hold_threshold);
+
+    /**
+     * @brief Write array of trigger and hold thresholds for all distance gates (0-15)
+     * @param trigger_thresholds Array of 16 moving sensitivities.
+     * @param hold_thresholds Array of 16 static sensitivities.
+     * @return true if successful
+     */
+    bool writeSensitivityConfig(const uint32_t trigger_thresholds[16], const uint32_t hold_thresholds[16]);
+
+    /**
      * @brief Read 8-byte serial number
      * @param buffer Buffer to store null-terminated serial number
      * @param len Buffer size (must be at least 9)
@@ -113,6 +153,12 @@ public:
      * @return true if motion detected
      */
     bool isMotionDetected() const;
+
+    /**
+     * @brief Get the timestamp (millis) of the last parsed frame
+     * @return millis timestamp
+     */
+    uint32_t lastFrameTime() const;
 
     /**
      * @brief Get target distance
@@ -129,6 +175,7 @@ private:
      */
     bool parseMinimalFrame(uint8_t *frame, size_t len);
 
+protected:
     /**
      * @brief Write frame header: FD FC FB FA
      */
@@ -150,4 +197,5 @@ private:
     int _txPin;              ///< GPIO used for sensor RX
     bool _motion = false;    ///< Internal motion state
     uint16_t _distance = 0;  ///< Last known distance
+    uint32_t _lastFrameTime = 0; ///< Last frame millis
 };
