@@ -9,6 +9,13 @@
 #pragma once
 #include <Arduino.h>
 
+#if __has_include("../../../shared/paxcounter.conf")
+#include "../../../shared/paxcounter.conf"
+#endif
+#if __has_include("../../src/paxcounter.conf")
+#include "../../src/paxcounter.conf"
+#endif
+
 /**
  * @def LD2410S_ENABLE_LOG
  * @brief Enable or disable Serial debug logging (1 = enabled, 0 = disabled)
@@ -141,7 +148,29 @@ public:
     bool writeSensitivityConfig(const uint32_t trigger_thresholds[16], const uint32_t hold_thresholds[16]);
 
     /**
+     * @brief Run automatic background calibration
+     * @param duration_s Duration in seconds (e.g., 120 for 2 mins)
+     * @return true if successful
+     */
+    bool runAutoCalibration(uint16_t duration_s);
+
+    /**
+     * @brief Read background trigger thresholds
+     * @param trigger_thresholds Array of 16 moving sensitivities
+     * @return true if successful
+     */
+    bool readTriggerThresholds(uint32_t trigger_thresholds[16]);
+
+    /**
+     * @brief Read background hold thresholds
+     * @param hold_thresholds Array of 16 static sensitivities
+     * @return true if successful
+     */
+    bool readHoldThresholds(uint32_t hold_thresholds[16]);
+
+    /**
      * @brief Read 8-byte serial number
+
      * @param buffer Buffer to store null-terminated serial number
      * @param len Buffer size (must be at least 9)
      * @return true if successful
@@ -166,6 +195,13 @@ public:
      */
     uint16_t getDistance() const;
 
+#ifdef LD2410S_FULL
+    /**
+     * @brief Get the raw energy gates array (64 bytes)
+     */
+    const uint8_t* getEnergyGates() const { return _energyGates; }
+#endif
+
 private:
     /**
      * @brief Parse minimal output frame
@@ -174,6 +210,11 @@ private:
      * @return true if successfully parsed
      */
     bool parseMinimalFrame(uint8_t *frame, size_t len);
+
+#ifdef LD2410S_FULL
+    bool parseStandardFrame(uint8_t *frame, size_t len);
+    uint8_t _energyGates[64] = {0}; ///< Raw energy bytes for 16 distance gates
+#endif
 
 protected:
     /**
