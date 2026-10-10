@@ -1,6 +1,6 @@
 {
   "name": "HLK-LD2410S",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "keywords": ["human", "presence", "low power", "radar"],
   "description": "Arduino library for low power human presence sensor module HLK-LD2410S",
   "repository":

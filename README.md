@@ -42,6 +42,10 @@ Arduino library for **low power human presence sensor**  module **HLK-LD2410S**
     - [Read serial number command](#--read-serial-number-command)
     - [Write generic parameter commands](#--write-generic-parameter-commands)
     - [Read common parameter commands](#--read-common-parameter-commands)
+    - [Run auto calibration command](#--run-auto-calibration-command)
+    - [Read trigger thresholds command](#--read-trigger-thresholds-command)
+    - [Read hold thresholds command](#--read-hold-thresholds-command)
+    - [Standard frame and Energy Gates](#--standard-frame-and-energy-gates)
 - [Example Code (ESP32)](#-example-code-esp32)
 - [Paxcounter Wi-Fi Bridge Integration](#-paxcounter-wi-fi-bridge-integration)
 ## [Overview](#overview)
@@ -574,6 +578,35 @@ bool LD2410S::readCommonParametersCommand(uint32_t &farthest_distance, uint32_t 
     }
     return false;
 }
+```
+
+### - [Run auto calibration command](#--run-auto-calibration-command)
+Triggers the background noise calibration process.
+
+```cpp
+bool LD2410S::runAutoCalibration(uint16_t duration_s)
+```
+
+### - [Read trigger thresholds command](#--read-trigger-thresholds-command)
+Reads the 16 moving trigger threshold values.
+
+```cpp
+bool LD2410S::readTriggerThresholds(uint32_t trigger_thresholds[16])
+```
+
+### - [Read hold thresholds command](#--read-hold-thresholds-command)
+Reads the 16 static hold threshold values.
+
+```cpp
+bool LD2410S::readHoldThresholds(uint32_t hold_thresholds[16])
+```
+
+### - [Standard frame and Energy Gates](#--standard-frame-and-energy-gates)
+When `#define LD2410S_FULL` is enabled, the library supports parsing standard frames containing energy values for all 16 distance gates.
+
+```cpp
+// Get a pointer to the 64-byte array containing the energy gates
+const uint8_t* LD2410S::getEnergyGates() const
 ```
 
 ## 📦 [Example Code (ESP32)](#-example-code-esp32)
